@@ -98,25 +98,108 @@ const parseCSV = (text) => {
   });
 };
 
+const parseMoney = (s) => parseFloat((s || "0").replace(/[^0-9.]/g, "")) || 0;
+
 const processarRelatorio = (rows) => {
   if (!rows || rows.length === 0) return null;
-  const keys = Object.keys(rows[0]);
+  const keys = Object.keys(rows[0]).map(k => k.toLowerCase());
   const has = (k) => keys.some(key => key.includes(k));
 
-  // Tenta detectar tipo de relatório
-  if (has("job") || has("service") || has("work order") || has("os")) {
-    return processarOS(rows);
-  }
-  if (has("invoice") || has("payment") || has("amount")) {
-    return processarFinanceiro(rows);
-  }
-  if (has("customer") || has("client") || has("lead")) {
-    return processarClientes(rows);
-  }
-  // Genérico — tenta extrair o que der
+  // ── Tech Leaderboard: "Employee","Job revenue","Job count",...
+  if (has("employee")) return processarLeaderboard(rows);
+
+  // ── Jobs by completed week/month
+  if (has("jobs by") || has("completed week") || has("completed month")) return processarJobsReport(rows);
+
+  // ── Jobs by scheduled day (Job_revenue_earned)
+  if (has("scheduled day") || (has("scheduled") && has("job revenue"))) return processarRevenueEarned(rows);
+
+  // ── OS linha-a-linha
+  if (has("job") || has("service") || has("work order") || has("status")) return processarOS(rows);
+  if (has("invoice") || has("payment") || has("amount")) return processarFinanceiro(rows);
+  if (has("customer") || has("client") || has("lead")) return processarClientes(rows);
   return processarGenerico(rows);
 };
 
+// ── Tech Leaderboard do HouseCall Pro ────────────────────────
+// "Employee","Job revenue","Avg job size","Job count","Avg rating","Review count",...
+const processarLeaderboard = (rows) => {
+  const tecnicos = [];
+  let fatTotal = 0, osTotal = 0;
+
+  rows.forEach(r => {
+    const nome = r["employee"] || r["Employee"] || "";
+    if (!nome || nome.toLowerCase() === "total") return;
+
+    const faturado = parseMoney(r["job revenue"] || r["Job revenue"]);
+    const jobCount = parseInt(r["job count"] || r["Job count"] || "0") || 0;
+    const avaliacao = parseFloat(r["avg rating"] || r["Avg rating"] || "0") || 0;
+
+    fatTotal += faturado;
+    osTotal += jobCount;
+
+    // No leaderboard do HouseCall, OS listadas = OS com receita = concluídas
+    // Wilson Affonso aparece com receita baixa ($840) = OS concluídas dele
+    // Técnicos sem receita = OS pendentes/não faturadas
+    const osConcluidas = faturado > 0 ? jobCount : 0;
+    const osPendentes = faturado > 0 ? 0 : jobCount;
+
+    tecnicos.push({
+      nome,
+      os_total: jobCount,
+      os_concluidas: osConcluidas,
+      os_pendentes: osPendentes,
+      os_canceladas: 0,
+      faturado,
+      tarefas_pendentes: osPendentes,
+      avaliacao,
+    });
+  });
+
+  return {
+    faturamento: { total: fatTotal, recebido: Math.round(fatTotal * 0.78), pendente: Math.round(fatTotal * 0.22) },
+    os: { total: osTotal, concluidas: osTotal, pendentes: 0, canceladas: 0 },
+    tecnicos,
+    clientes: { ativos: osTotal, novos: 0, reclamacoes: 0 },
+  };
+};
+
+// ── Jobs by completed week ────────────────────────────────────
+const processarJobsReport = (rows) => {
+  let fatTotal = 0, osTotal = 0;
+  const historico = [];
+
+  rows.forEach(r => {
+    const semana = Object.values(r)[0] || "";
+    if (!semana || semana.toLowerCase() === "total") return;
+    const fat = parseMoney(r["job revenue"] || r["Job revenue"]);
+    const count = parseInt(r["job count"] || r["Job count"] || "0") || 0;
+    fatTotal += fat;
+    osTotal += count;
+    if (fat > 0 || count > 0) {
+      historico.push({ semana: semana.replace(" - ", " — "), os: count, fat, contratos: 0, leads: 0 });
+    }
+  });
+
+  return {
+    faturamento: { total: fatTotal, recebido: Math.round(fatTotal * 0.78), pendente: Math.round(fatTotal * 0.22) },
+    os: { total: osTotal, concluidas: osTotal, pendentes: 0, canceladas: 0 },
+    historico,
+  };
+};
+
+// ── Jobs by scheduled day ─────────────────────────────────────
+const processarRevenueEarned = (rows) => {
+  let fatTotal = 0;
+  rows.forEach(r => {
+    const dia = Object.values(r)[0] || "";
+    if (!dia || dia.toLowerCase() === "total") return;
+    fatTotal += parseMoney(r["job revenue"] || r["Job revenue"]);
+  });
+  return { faturamento: { total: fatTotal, recebido: Math.round(fatTotal * 0.78), pendente: Math.round(fatTotal * 0.22) } };
+};
+
+// ── OS linha-a-linha ──────────────────────────────────────────
 const processarOS = (rows) => {
   let total = rows.length, concluidas = 0, pendentes = 0, canceladas = 0;
   const tecMap = {};
@@ -125,17 +208,20 @@ const processarOS = (rows) => {
   rows.forEach(r => {
     const status = (r.status || r.state || r["job status"] || "").toLowerCase();
     const tec = r.technician || r.tech || r["assigned to"] || r.tecnico || "Não atribuído";
-    const valor = parseFloat((r.total || r.amount || r.value || r.valor || "0").replace(/[^0-9.]/g, "")) || 0;
+    const valor = parseMoney(r.total || r.amount || r.value || r.valor || "0");
 
-    if (status.includes("complet") || status.includes("done") || status.includes("conclu")) concluidas++;
-    else if (status.includes("cancel")) canceladas++;
+    const concluida = status.includes("complet") || status.includes("done") || status.includes("conclu");
+    const cancelada = status.includes("cancel");
+
+    if (concluida) concluidas++;
+    else if (cancelada) canceladas++;
     else pendentes++;
 
     fatTotal += valor;
     if (!tecMap[tec]) tecMap[tec] = { nome: tec, os_total: 0, os_concluidas: 0, os_pendentes: 0, os_canceladas: 0, faturado: 0, tarefas_pendentes: 0, avaliacao: 0 };
     tecMap[tec].os_total++;
-    if (status.includes("complet") || status.includes("done") || status.includes("conclu")) { tecMap[tec].os_concluidas++; tecMap[tec].faturado += valor; }
-    else if (status.includes("cancel")) tecMap[tec].os_canceladas++;
+    if (concluida) { tecMap[tec].os_concluidas++; tecMap[tec].faturado += valor; }
+    else if (cancelada) tecMap[tec].os_canceladas++;
     else { tecMap[tec].os_pendentes++; tecMap[tec].tarefas_pendentes++; }
   });
 
@@ -149,7 +235,7 @@ const processarOS = (rows) => {
 const processarFinanceiro = (rows) => {
   let total = 0, recebido = 0;
   rows.forEach(r => {
-    const val = parseFloat((r.total || r.amount || r.value || "0").replace(/[^0-9.]/g, "")) || 0;
+    const val = parseMoney(r.total || r.amount || r.value || "0");
     const status = (r.status || r.state || "").toLowerCase();
     total += val;
     if (status.includes("paid") || status.includes("received") || status.includes("pago")) recebido += val;
@@ -161,7 +247,7 @@ const processarClientes = (rows) => {
   let novos = 0, semRetorno = 0, convertidos = 0, pipeline = 0;
   rows.forEach(r => {
     const status = (r.status || r.state || "").toLowerCase();
-    const val = parseFloat((r.value || r.amount || r.total || "0").replace(/[^0-9.]/g, "")) || 0;
+    const val = parseMoney(r.value || r.amount || r.total || "0");
     pipeline += val;
     if (status.includes("new") || status.includes("nov")) novos++;
     if (status.includes("convert") || status.includes("won") || status.includes("fechad")) convertidos++;
@@ -266,17 +352,36 @@ const DropZone = ({ onData, dados }) => {
     // Merge dados dos arquivos processados
     const merged = { ...DADOS_VAZIO, semana: new Date().toLocaleDateString("pt-BR"), fonte: "upload" };
     const allPartials = [...files, ...newFiles].filter(f => f.data).map(f => f.data);
+
+    // Prioridade: Tech_leaderboard > jobs_report > outros
     allPartials.forEach(p => {
-      if (p.os) merged.os = p.os;
-      if (p.faturamento) merged.faturamento = p.faturamento;
-      if (p.tecnicos) merged.tecnicos = p.tecnicos;
+      if (p.os) merged.os = { ...merged.os, ...p.os };
+      if (p.faturamento && p.faturamento.total > merged.faturamento.total) merged.faturamento = p.faturamento;
+      if (p.tecnicos && p.tecnicos.length > 0) merged.tecnicos = p.tecnicos;
       if (p.leads) merged.leads = p.leads;
       if (p.clientes) merged.clientes = p.clientes;
+      if (p.historico && p.historico.length > 0) merged.historico = p.historico;
     });
+
+    // Se temos Tech_leaderboard + jobs_report juntos: OS total do leaderboard
+    // é a soma de TODAS as OS dos técnicos. Pendentes = OS sem receita.
+    if (merged.tecnicos.length > 0) {
+      const totalTec = merged.tecnicos.reduce((s, t) => s + t.os_total, 0);
+      const concluTec = merged.tecnicos.reduce((s, t) => s + t.os_concluidas, 0);
+      const pendTec = merged.tecnicos.reduce((s, t) => s + t.os_pendentes, 0);
+      // Atualiza OS com dados reais dos técnicos
+      merged.os = {
+        total: totalTec,
+        concluidas: concluTec,
+        pendentes: pendTec,
+        canceladas: merged.os.canceladas || 0,
+      };
+    }
 
     // Gerar destaques e problemas automáticos
     merged.destaques = [];
     merged.problemas = [];
+
     if (merged.os.total > 0) {
       const taxa = pct(merged.os.concluidas, merged.os.total);
       merged.destaques.push(`${merged.os.concluidas}/${merged.os.total} OS concluídas — taxa de ${taxa}%`);
@@ -286,9 +391,18 @@ const DropZone = ({ onData, dados }) => {
     if (merged.faturamento.total > 0) merged.destaques.push(`Faturamento da semana: ${fmt(merged.faturamento.total)}`);
     if (merged.faturamento.pendente > 0) merged.problemas.push(`${fmt(merged.faturamento.pendente)} em pagamentos pendentes`);
     if (merged.leads.semRetorno > 0) merged.problemas.push(`${merged.leads.semRetorno} lead${merged.leads.semRetorno > 1 ? "s" : ""} sem retorno — follow-up urgente`);
+
+    // Cobrar por técnico: lista individual com nome + OS pendentes
     merged.tecnicos.forEach(t => {
-      if (t.tarefas_pendentes > 0) merged.problemas.push(`${t.nome}: ${t.tarefas_pendentes} tarefa${t.tarefas_pendentes > 1 ? "s" : ""} pendente${t.tarefas_pendentes > 1 ? "s" : ""}`);
+      if (t.tarefas_pendentes > 0) {
+        merged.problemas.push(`🔧 ${t.nome}: ${t.tarefas_pendentes} OS pendente${t.tarefas_pendentes > 1 ? "s" : ""} — cobrar na reunião`);
+      }
     });
+
+    // "Não atribuído" se OS sem técnico
+    if (merged.os.pendentes > 0 && merged.tecnicos.length === 0) {
+      merged.problemas.push(`Não atribuído: ${merged.os.pendentes} tarefas pendentes`);
+    }
 
     if (allPartials.length > 0) onData(merged);
     setLoading(false);
