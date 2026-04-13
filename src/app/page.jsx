@@ -82,7 +82,7 @@ const DADOS_DEMO = {
 };
 
 // ── HELPERS ──────────────────────────────────────────────────
-const fmt = (v) => `R$ ${(v||0).toLocaleString("pt-BR")}`;
+const fmt = (v) => `$${(v||0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pct = (a, b) => b > 0 ? Math.round((a / b) * 100) : 0;
 
 // ── PARSER DE CSV/EXCEL (lê relatórios HouseCall Pro) ────────
@@ -792,3 +792,4 @@ export default function App() {
     </div>
   );
 }
+
