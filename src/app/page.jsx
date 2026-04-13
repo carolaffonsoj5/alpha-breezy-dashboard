@@ -20,10 +20,10 @@ const EMPRESA = {
 };
 
 const USUARIOS = {
-  wilson: { senha: "alpha123", papel: "dono", nome: "Wilson Affonso", tecnico: true },
-  maria: { senha: "alpha123", papel: "dono", nome: "Maria Affonso" },
-  carolina: { senha: "alpha123", papel: "gerente", nome: "Carolina Affonso" },
-  nicolas: { senha: "alpha123", papel: "atendente", nome: "Nicolas Affonso" },
+  wilson: { senha: "wilson123", papel: "dono", nome: "Wilson Affonso", tecnico: true },
+  maria: { senha: "maria123", papel: "dono", nome: "Maria Affonso" },
+  carolina: { senha: "carol123", papel: "gerente", nome: "Carolina Affonso" },
+  nicolas: { senha: "nicolas123", papel: "atendente", nome: "Nicolas Affonso" },
 };
 
 // ── DADOS INICIAIS (substituídos pelo upload/API) ────────────
@@ -792,4 +792,3 @@ export default function App() {
     </div>
   );
 }
-
