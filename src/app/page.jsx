@@ -20,10 +20,10 @@ const EMPRESA = {
 };
 
 const USUARIOS = {
-  wilson: { senha: "wilson123", papel: "dono", nome: "Wilson Affonso", tecnico: true },
-  maria: { senha: "maria123", papel: "dono", nome: "Maria Affonso" },
-  carolina: { senha: "carol123", papel: "gerente", nome: "Carolina Affonso" },
-  nicolas: { senha: "nicolas123", papel: "atendente", nome: "Nicolas Affonso" },
+  wilson: { senha: "alpha123", papel: "dono", nome: "Wilson Affonso", tecnico: true },
+  maria: { senha: "alpha123", papel: "dono", nome: "Maria Affonso" },
+  carolina: { senha: "alpha123", papel: "gerente", nome: "Carolina Affonso" },
+  nicolas: { senha: "alpha123", papel: "atendente", nome: "Nicolas Affonso" },
 };
 
 // ── DADOS INICIAIS (substituídos pelo upload/API) ────────────
@@ -36,6 +36,7 @@ const DADOS_VAZIO = {
   leads: { novos: 0, convertidos: 0, semRetorno: 0, pipeline: 0 },
   estoque: [],
   clientes: { ativos: 0, novos: 0, reclamacoes: 0 },
+  clientesPendentes: [],
   destaques: [],
   problemas: [],
   historico: [],
@@ -108,6 +109,9 @@ const processarRelatorio = (rows) => {
   // ── Tech Leaderboard: "Employee","Job revenue","Job count",...
   if (has("employee")) return processarLeaderboard(rows);
 
+  // ── Customer details: "Customer name","Job revenue","Paid amount",...
+  if (has("customer name") || (has("customer") && has("paid amount"))) return processarCustomerDetails(rows);
+
   // ── Jobs by completed week/month
   if (has("jobs by") || has("completed week") || has("completed month")) return processarJobsReport(rows);
 
@@ -161,6 +165,40 @@ const processarLeaderboard = (rows) => {
     os: { total: osTotal, concluidas: osTotal, pendentes: 0, canceladas: 0 },
     tecnicos,
     clientes: { ativos: osTotal, novos: 0, reclamacoes: 0 },
+  };
+};
+
+// ── Customer Details do HouseCall Pro ────────────────────────
+// "Customer name","Job revenue","Job count","Paid amount",...
+const processarCustomerDetails = (rows) => {
+  const clientesPendentes = [];
+  let fatTotal = 0, pagoTotal = 0, osTotal = 0;
+
+  rows.forEach(r => {
+    const nome = r["customer name"] || r["Customer name"] || "";
+    if (!nome || nome.toLowerCase() === "total") return;
+
+    const revenue = parseMoney(r["job revenue"] || r["Job revenue"]);
+    const pago = parseMoney(r["paid amount"] || r["Paid amount"]);
+    const jobs = parseInt(r["job count"] || r["Job count"] || "1") || 1;
+    const pendente = revenue - pago;
+
+    fatTotal += revenue;
+    pagoTotal += pago;
+    osTotal += jobs;
+
+    if (pendente > 0.01) {
+      clientesPendentes.push({ nome, revenue, pago, pendente, jobs });
+    }
+  });
+
+  const pendenteTotal = fatTotal - pagoTotal;
+
+  return {
+    faturamento: { total: fatTotal, recebido: pagoTotal, pendente: pendenteTotal },
+    os: { total: osTotal, concluidas: osTotal, pendentes: 0, canceladas: 0 },
+    clientes: { ativos: osTotal, novos: 0, reclamacoes: 0 },
+    clientesPendentes, // lista detalhada para "Cobrar na Reunião"
   };
 };
 
@@ -268,7 +306,7 @@ const Card = ({ children, style }) => (
 const Metric = ({ icon, label, value, sub, color, big }) => (
   <Card>
     <div style={{ fontSize: 10, color: "#5A6A7A", fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{icon} {label}</div>
-    <div style={{ fontSize: big ? 32 : 24, fontWeight: 900, color: color || "#E8F0F8", letterSpacing: -1, fontFamily: "'DM Sans', 'Outfit', system-ui, sans-serif" }}>{value}</div>
+    <div style={{ fontSize: big ? 22 : 20, fontWeight: 900, color: color || "#E8F0F8", letterSpacing: -1, fontFamily: "'DM Sans', 'Outfit', system-ui, sans-serif" }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: "#4A5A6A", marginTop: 4 }}>{sub}</div>}
   </Card>
 );
@@ -361,6 +399,7 @@ const DropZone = ({ onData, dados }) => {
       if (p.leads) merged.leads = p.leads;
       if (p.clientes) merged.clientes = p.clientes;
       if (p.historico && p.historico.length > 0) merged.historico = p.historico;
+      if (p.clientesPendentes && p.clientesPendentes.length > 0) merged.clientesPendentes = p.clientesPendentes;
     });
 
     // Se temos Tech_leaderboard + jobs_report juntos: OS total do leaderboard
@@ -389,7 +428,17 @@ const DropZone = ({ onData, dados }) => {
       if (merged.os.canceladas > 0) merged.problemas.push(`${merged.os.canceladas} OS cancelada${merged.os.canceladas > 1 ? "s" : ""} — analisar causa`);
     }
     if (merged.faturamento.total > 0) merged.destaques.push(`Faturamento da semana: ${fmt(merged.faturamento.total)}`);
-    if (merged.faturamento.pendente > 0) merged.problemas.push(`${fmt(merged.faturamento.pendente)} em pagamentos pendentes`);
+
+    // Clientes com pagamento pendente — detalhado por nome
+    if (merged.clientesPendentes.length > 0) {
+      merged.clientesPendentes
+        .sort((a, b) => b.pendente - a.pendente)
+        .forEach(c => {
+          merged.problemas.push(`💳 ${c.nome}: ${fmt(c.pendente)} em aberto (cobrado: ${fmt(c.revenue)})`);
+        });
+    } else if (merged.faturamento.pendente > 0) {
+      merged.problemas.push(`${fmt(merged.faturamento.pendente)} em pagamentos pendentes`);
+    }
     if (merged.leads.semRetorno > 0) merged.problemas.push(`${merged.leads.semRetorno} lead${merged.leads.semRetorno > 1 ? "s" : ""} sem retorno — follow-up urgente`);
 
     // Cobrar por técnico: lista individual com nome + OS pendentes
