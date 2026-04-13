@@ -87,14 +87,35 @@ const fmt = (v) => `$${(v||0).toLocaleString("en-US", { minimumFractionDigits: 2
 const pct = (a, b) => b > 0 ? Math.round((a / b) * 100) : 0;
 
 // ── PARSER DE CSV/EXCEL (lê relatórios HouseCall Pro) ────────
+const parseCSVLine = (line) => {
+  const result = [];
+  let cur = "", inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      // aspas duplas dentro de campo com aspas
+      if (inQuote && line[i+1] === '"') { cur += '"'; i++; }
+      else { inQuote = !inQuote; }
+    } else if (ch === ',' && !inQuote) {
+      result.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  result.push(cur.trim());
+  return result;
+};
+
 const parseCSV = (text) => {
-  const lines = text.trim().split("\n");
+  // Normaliza quebras de linha
+  const lines = text.trim().replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   if (lines.length < 2) return null;
-  const headers = lines[0].split(",").map(h => h.trim().replace(/"/g, "").toLowerCase());
-  return lines.slice(1).map(line => {
-    const vals = line.split(",").map(v => v.trim().replace(/"/g, ""));
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    const vals = parseCSVLine(line);
     const obj = {};
-    headers.forEach((h, i) => { obj[h] = vals[i] || ""; });
+    headers.forEach((h, i) => { obj[h] = (vals[i] || "").trim(); });
     return obj;
   });
 };
@@ -227,14 +248,10 @@ const processarJobsReport = (rows) => {
 };
 
 // ── Jobs by scheduled day ─────────────────────────────────────
+// Este relatório é por DIA agendado — não usar para faturamento principal nem histórico
+// Retorna null para ser ignorado no merge
 const processarRevenueEarned = (rows) => {
-  let fatTotal = 0;
-  rows.forEach(r => {
-    const dia = Object.values(r)[0] || "";
-    if (!dia || dia.toLowerCase() === "total") return;
-    fatTotal += parseMoney(r["job revenue"] || r["Job revenue"]);
-  });
-  return { faturamento: { total: fatTotal, recebido: Math.round(fatTotal * 0.78), pendente: Math.round(fatTotal * 0.22) } };
+  return null; // ignorar — usar Customer_details ou Tech_leaderboard para faturamento
 };
 
 // ── OS linha-a-linha ──────────────────────────────────────────
@@ -391,16 +408,22 @@ const DropZone = ({ onData, dados }) => {
     const merged = { ...DADOS_VAZIO, semana: new Date().toLocaleDateString("pt-BR"), fonte: "upload" };
     const allPartials = [...files, ...newFiles].filter(f => f.data).map(f => f.data);
 
-    // Prioridade: Tech_leaderboard > jobs_report > outros
+    // Prioridade: Customer_details > Tech_leaderboard > jobs_report > outros
+    // Ordem de prioridade para faturamento: Customer_details tem pago/pendente real
     allPartials.forEach(p => {
-      if (p.os) merged.os = { ...merged.os, ...p.os };
+      if (p.os && p.os.total > merged.os.total) merged.os = { ...merged.os, ...p.os };
       if (p.faturamento && p.faturamento.total > merged.faturamento.total) merged.faturamento = p.faturamento;
       if (p.tecnicos && p.tecnicos.length > 0) merged.tecnicos = p.tecnicos;
       if (p.leads) merged.leads = p.leads;
-      if (p.clientes) merged.clientes = p.clientes;
+      // clientes: só atualiza se vier do customer_details (tem ativos reais)
+      if (p.clientes && p.clientes.ativos > 0 && p.clientes.ativos < 100) merged.clientes = p.clientes;
       if (p.historico && p.historico.length > 0) merged.historico = p.historico;
       if (p.clientesPendentes && p.clientesPendentes.length > 0) merged.clientesPendentes = p.clientesPendentes;
     });
+    
+    // Se temos Customer_details, usar faturamento real (recebido/pendente exatos)
+    const customerPartial = allPartials.find(p => p.clientesPendentes);
+    if (customerPartial) merged.faturamento = customerPartial.faturamento;
 
     // Se temos Tech_leaderboard + jobs_report juntos: OS total do leaderboard
     // é a soma de TODAS as OS dos técnicos. Pendentes = OS sem receita.
